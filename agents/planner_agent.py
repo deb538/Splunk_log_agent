@@ -1,12 +1,11 @@
 from google.adk.agents import LlmAgent
 from google.adk.models.lite_llm import LiteLlm
 from .schemas import PlanOutput
-
-CLAUDE_SONNET_BEDROCK = "bedrock/anthropic.claude-3-sonnet-20240229-v1:0"
+import config
 
 planner_agent = LlmAgent(
     name="PlannerAgent",
-    model=LiteLlm(model=CLAUDE_SONNET_BEDROCK),
+    model=LiteLlm(model=config.MODEL_NAME),
     instruction="""
     You are an expert Splunk analyst and the first agent in a pipeline. Your critical role is to analyze the user's query and create a structured plan.
 

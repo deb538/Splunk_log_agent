@@ -1,4 +1,5 @@
 import json
+import logging
 
 def splunk_search(query: str) -> str:
     """
@@ -8,8 +9,8 @@ def splunk_search(query: str) -> str:
     Args:
         query (str): The Splunk Search Processing Language (SPL) query.
     """
-    print(f"--- 🛠️ TOOL EXECUTING: splunk_search ---")
-    print(f"SPL Query: {query}")
+    logging.info(f"--- 🛠️ TOOL EXECUTING: splunk_search ---")
+    logging.info(f"SPL Query: {query}")
 
     # MOCK IMPLEMENTATION: Replace with actual Splunk API calls.
     if "action=failure" in query or "NullPointerException" in query:

@@ -1,4 +1,5 @@
 import json
+import logging
 
 def get_bitbucket_code_snippet(repo_url: str, file_path: str, line_number: int) -> str:
     """
@@ -10,8 +11,8 @@ def get_bitbucket_code_snippet(repo_url: str, file_path: str, line_number: int) 
         file_path (str): The path to the file within the repository.
         line_number (int): The specific line number associated with an error.
     """
-    print(f"--- 🛠️ TOOL EXECUTING: get_bitbucket_code_snippet ---")
-    print(f"Fetching code from {repo_url}/{file_path} at line {line_number}")
+    logging.info(f"--- 🛠️ TOOL EXECUTING: get_bitbucket_code_snippet ---")
+    logging.info(f"Fetching code from {repo_url}/{file_path} at line {line_number}")
 
     # MOCK IMPLEMENTATION: Updated to be dynamic for better testing.
     payment_service_mock_code = {

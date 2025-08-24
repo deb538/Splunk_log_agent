@@ -5,3 +5,5 @@ python-dotenv
 litellm
 boto3
 pydantic
+sqlalchemy
+psycopg2-binary
