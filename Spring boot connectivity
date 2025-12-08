@@ -1,0 +1,108 @@
+import com.fasterxml.jackson.databind.JsonNode;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.MediaType;
+import org.springframework.stereotype.Service;
+import org.springframework.web.reactive.function.client.WebClient;
+import reactor.core.publisher.Mono;
+import reactor.util.retry.Retry;
+
+import java.time.Duration;
+import java.util.List;
+import java.util.Map;
+
+@Service
+public class AgentService {
+
+    private final WebClient webClient;
+    private final String agentAppName;
+
+    public AgentService(WebClient.Builder builder, 
+                        @Value("${agent.url}") String agentUrl,
+                        @Value("${agent.app-name:default}") String appName) {
+        this.webClient = builder.baseUrl(agentUrl).build();
+        this.agentAppName = appName;
+    }
+
+    /**
+     * Main Entry Point: Orchestrates Session -> Run -> Retry -> Process
+     */
+    public String processUserRequest(String userId, String userQuery) {
+        // 1. Get Session ID (Blocking)
+        String sessionId = getOrCreateSession(userId);
+        System.out.println("DEBUG: Acquired Session ID: " + sessionId);
+
+        // 2. Call Agent with Retry Logic (Blocking)
+        try {
+            return callRunEndpoint(sessionId, userQuery);
+        } catch (Exception e) {
+            // Handle exhaustion of retries
+            return "System Error: Unable to reach agent after multiple attempts. " + e.getMessage();
+        }
+    }
+
+    /**
+     * Step 1: Hit the specific ADK session endpoint
+     */
+    private String getOrCreateSession(String userId) {
+        return webClient.post()
+                .uri("/apps/{app}/users/{user}/sessions", agentAppName, userId)
+                .retrieve()
+                .bodyToMono(JsonNode.class)
+                .map(json -> json.get("id").asText()) // Extract "id" from response
+                // Simple retry for session creation as well (optional)
+                .retry(1) 
+                .block(); // BLOCKING: Wait here
+    }
+
+    /**
+     * Step 2: Call /run with 3x Retry Backoff
+     */
+    private String callRunEndpoint(String sessionId, String query) {
+        
+        var payload = Map.of(
+            "app_name", agentAppName,
+            "session_id", sessionId,
+            "new_message", Map.of(
+                "role", "user", 
+                "parts", List.of(Map.of("text", query))
+            )
+        );
+
+        Mono<String> agentResponseMono = webClient.post()
+                .uri("/run")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(payload)
+                .retrieve()
+                // Define what counts as an error to retry on (4xx, 5xx, Network issues)
+                .onStatus(status -> status.is5xxServerError(), response -> 
+                    Mono.error(new RuntimeException("Agent Server Error: " + response.statusCode())))
+                .bodyToMono(JsonNode.class) // Get full event list
+                .map(this::extractTextFromEvents); // Parse logic
+
+        // --- RETRY LOGIC ---
+        return agentResponseMono
+                .retryWhen(Retry.backoff(3, Duration.ofSeconds(2)) // Retry 3 times, wait 2s, 4s, 8s
+                        .filter(throwable -> throwable instanceof RuntimeException) // Only retry on RuntimeExceptions (server errors)
+                        .onRetry(retrySignal -> System.out.println("Retrying agent call... Attempt " + (retrySignal.totalRetries() + 1)))
+                )
+                .block(); // BLOCKING: Wait for final result or error
+    }
+
+    /**
+     * Helper: Extract final text from ADK Event List
+     */
+    private String extractTextFromEvents(JsonNode events) {
+        if (!events.isArray()) return "";
+        
+        String lastResponse = "";
+        // Iterate and find the last model response
+        for (JsonNode event : events) {
+            // Check if this event has text and is NOT from the user
+            if (event.has("text") && 
+               (!event.has("role") || !"user".equals(event.get("role").asText()))) {
+                lastResponse = event.get("text").asText();
+            }
+        }
+        return lastResponse;
+    }
+}
