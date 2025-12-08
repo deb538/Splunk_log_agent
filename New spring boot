@@ -1,0 +1,85 @@
+@Service
+public class SqlAgentService {
+
+    private final WebClient webClient;
+    private final JdbcTemplate jdbcTemplate;
+    private final String agentAppName;
+
+    // Maximum number of times we let the agent try to fix its own code
+    private static final int MAX_FIX_ATTEMPTS = 3;
+
+    public SqlAgentService(WebClient.Builder builder, 
+                           JdbcTemplate jdbcTemplate,
+                           @Value("${agent.url}") String agentUrl,
+                           @Value("${agent.app-name}") String appName) {
+        this.webClient = builder.baseUrl(agentUrl).build();
+        this.jdbcTemplate = jdbcTemplate;
+        this.agentAppName = appName;
+    }
+
+    public List<Map<String, Object>> getReportFromAgent(String userId, String userQuery) {
+        String sessionId = getOrCreateSession(userId); // (From previous answer)
+        
+        String currentPrompt = userQuery;
+        String lastSql = "";
+        
+        // Loop for Self-Correction
+        for (int attempt = 1; attempt <= MAX_FIX_ATTEMPTS; attempt++) {
+            
+            // 1. Call Agent to get SQL
+            String generatedSql = callAgent(sessionId, currentPrompt);
+            generatedSql = cleanSql(generatedSql); // Remove markdown ```sql tags
+            lastSql = generatedSql;
+
+            try {
+                // 2. Try to Execute SQL
+                System.out.println("Executing SQL (Attempt " + attempt + "): " + generatedSql);
+                return jdbcTemplate.queryForList(generatedSql);
+
+            } catch (BadSqlGrammarException | DataAccessException e) {
+                // 3. FAILURE: Prepare feedback for the next loop iteration
+                System.err.println("SQL Failed: " + e.getMessage());
+
+                if (attempt == MAX_FIX_ATTEMPTS) {
+                    throw new RuntimeException("Agent failed to generate valid SQL after " + MAX_FIX_ATTEMPTS + " attempts. Last Error: " + e.getMessage());
+                }
+
+                // 4. Construct the "Feedback Payload" text
+                // We feed the error back into the 'currentPrompt' for the next iteration
+                currentPrompt = String.format(
+                    "The previous SQL query failed. \n" +
+                    "Query: %s \n" +
+                    "Error: %s \n" +
+                    "Please correct the syntax and return ONLY the fixed SQL.",
+                    lastSql, e.getMessage() // Get the specific DB error
+                );
+            }
+        }
+        return List.of(); // Should not reach here
+    }
+
+    private String callAgent(String sessionId, String text) {
+        var payload = Map.of(
+            "app_name", agentAppName,
+            "session_id", sessionId,
+            "new_message", Map.of("role", "user", "parts", List.of(Map.of("text", text)))
+        );
+
+        return webClient.post()
+                .uri("/run")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(payload)
+                .retrieve()
+                .bodyToMono(JsonNode.class)
+                .map(this::extractTextFromEvents) // (Method from previous answer)
+                .block();
+    }
+
+    private String cleanSql(String rawResponse) {
+        // Agents often return markdown like ```sql SELECT * ... ```
+        // This regex removes the code blocks to get raw SQL
+        return rawResponse.replaceAll("```sql|```", "").trim();
+    }
+    
+    // ... insert getOrCreateSession and extractTextFromEvents from previous answer ...
+}
